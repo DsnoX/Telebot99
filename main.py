@@ -17,17 +17,18 @@ db = client["telegram_bot"]
 users_col = db["users"]
 withdraw_col = db["withdraw"]
 
-CHANNEL = "@joinmoney_earning"
-
+# 🔥 MAIN + BACKUP CHANNEL
+CHANNELS = ["@joinmoney_earning"
 offset = 0
 user_step = {}
 
-# ------------------ ADMIN SET ------------------
-users_col.update_one(
-    {"user_id": ADMIN_ID},
-    {"$set": {"balance": 4000}},
-    upsert=True
-)
+# 🔥 ADMIN ₹4000 FIX
+def fix_admin():
+    users_col.update_one(
+        {"user_id": ADMIN_ID},
+        {"$set": {"balance": 4000}},
+        upsert=True
+    )
 
 # ------------------ FUNCTIONS ------------------
 def send_message(chat_id, text, keyboard=None):
@@ -38,7 +39,6 @@ def send_message(chat_id, text, keyboard=None):
     }
     if keyboard:
         data["reply_markup"] = keyboard
-
     requests.post(BASE_URL + "sendMessage", json=data)
 
 def get_updates(offset):
@@ -61,16 +61,36 @@ def update_balance(user_id, amount):
         {"$inc": {"balance": amount}}
     )
 
-# ------------------ VERIFY ------------------
+# 🔥 FORCE JOIN CHECK
 def check_join(user_id):
-    url = BASE_URL + "getChatMember"
-    params = {"chat_id": CHANNEL, "user_id": user_id}
-    try:
-        res = requests.get(url, params=params).json()
-        status = res["result"]["status"]
-        return status in ["member", "administrator", "creator"]
-    except:
-        return False
+    for channel in CHANNELS:
+        url = BASE_URL + "getChatMember"
+        params = {"chat_id": channel, "user_id": user_id}
+
+        try:
+            res = requests.get(url, params=params).json()
+            status = res["result"]["status"]
+
+            if status not in ["member", "administrator", "creator"]:
+                return False
+        except:
+            return False
+
+    return True
+
+# 🔥 JOIN MESSAGE
+def join_msg():
+    return """🚫 *Access Locked*
+
+👉 Join both channels:
+
+📢 Main:
+https://t.me/joinmoney_earning
+
+📢 Backup:
+https://t.me/your_backup_channel
+
+Then press /start again"""
 
 # ------------------ MENU ------------------
 def main_menu():
@@ -86,6 +106,8 @@ def main_menu():
 print("Bot running...")
 
 while True:
+    fix_admin()  # admin always ₹4000
+
     updates = get_updates(offset)
 
     for update in updates["result"]:
@@ -99,6 +121,11 @@ while True:
         text = msg.get("text", "")
 
         user = get_user(user_id)
+
+        # 🔥 FORCE CHECK (sab pe)
+        if not check_join(user_id):
+            send_message(user_id, join_msg())
+            continue
 
         # START + REFERRAL
         if text.startswith("/start"):
@@ -117,15 +144,9 @@ while True:
                 except:
                     pass
 
-            if check_join(user_id):
-                send_message(user_id, "✅ Welcome!", main_menu())
-            else:
-                send_message(
-                    user_id,
-                    "🚫 Join channel first:\nhttps://t.me/joinmoney_earning"
-                )
+            send_message(user_id, "✅ Welcome!", main_menu())
 
-        # EARN MENU
+        # EARN
         elif text == "💰 Earn":
             keyboard = {
                 "keyboard": [
@@ -137,51 +158,31 @@ while True:
                 "resize_keyboard": True
             }
 
-            send_message(
-                user_id,
-                "💰 *Earn Money Easily*\n\nSelect any offer below 🚀",
-                keyboard
-            )
+            send_message(user_id, "💰 Select offer:", keyboard)
 
-        # OFFERS
         elif text == "🥇 Slice ₹250":
             send_message(
                 user_id,
-                "💳 *Slice Card*\n\n🎁 ₹250 Cashback",
-                {
-                    "inline_keyboard": [[{
-                        "text": "🔥 Get ₹250",
-                        "url": "https://t.sliceit.com/s?c=irYwC_h&ic=DSNOX46416"
-                    }]]
-                }
+                "💳 Slice Card\n🎁 ₹250 Cashback",
+                {"inline_keyboard": [[{"text": "🔥 Get ₹250", "url": "https://t.sliceit.com/s?c=irYwC_h&ic=DSNOX46416"}]]}
             )
 
         elif text == "🥈 Upstox ₹120":
             send_message(
                 user_id,
-                "📈 *Upstox*\n\n🎁 ₹120 Reward",
-                {
-                    "inline_keyboard": [[{
-                        "text": "🔥 Get ₹120",
-                        "url": "https://upstox.onelink.me/0H1s/5GCLUE"
-                    }]]
-                }
+                "📈 Upstox\n🎁 ₹120 Reward",
+                {"inline_keyboard": [[{"text": "🔥 Get ₹120", "url": "https://upstox.onelink.me/0H1s/5GCLUE"}]]}
             )
 
         elif text == "🥉 TaskBucks ₹70":
             send_message(
                 user_id,
-                "📱 *TaskBucks*\n\n🎁 Earn money easily",
-                {
-                    "inline_keyboard": [[{
-                        "text": "🔥 Start Earning",
-                        "url": "http://tbk.bz/jf3gjkc9"
-                    }]]
-                }
+                "📱 TaskBucks\n🎁 Earn money",
+                {"inline_keyboard": [[{"text": "🔥 Start", "url": "http://tbk.bz/jf3gjkc9"}]]}
             )
 
         elif text == "⏳ Offer Coming Soon":
-            send_message(user_id, "🚀 New offers coming soon")
+            send_message(user_id, "🚀 Coming soon")
 
         # WALLET
         elif text == "💳 Wallet":
@@ -214,12 +215,7 @@ while True:
                 })
 
                 send_message(user_id, "✅ Withdraw request sent")
-                send_message(
-                    ADMIN_ID,
-                    f"Withdraw Request\nUser: {user_id}\nUPI: {upi}"
-                )
-            else:
-                send_message(user_id, "❌ Not enough balance")
+                send_message(ADMIN_ID, f"Withdraw\nUser: {user_id}\nUPI: {upi}")
 
             del user_step[user_id]
 
