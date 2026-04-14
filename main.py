@@ -239,9 +239,9 @@ while True:
 
     time.sleep(2)
 
-
 from flask import Flask
 import threading
+import os
 
 app = Flask(__name__)
 
@@ -250,6 +250,7 @@ def home():
     return "Bot Running ✅"
 
 def run():
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))  # 🔥 important
+    app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run).start()
