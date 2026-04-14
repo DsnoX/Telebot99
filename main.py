@@ -1,8 +1,10 @@
 import os
 import time
 import requests
+import threading
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from flask import Flask
 
 load_dotenv()
 
@@ -17,7 +19,6 @@ db = client["telegram_bot"]
 users_col = db["users"]
 withdraw_col = db["withdraw"]
 
-# 🔥 ONLY BACKUP CHANNEL
 CHANNEL = "@joinmoney_earning"
 
 offset = 0
@@ -45,18 +46,17 @@ def get_user(user_id):
     user = users_col.find_one({"user_id": user_id})
     if not user:
         users_col.insert_one({"user_id": user_id, "balance": 0, "ref_by": None})
-        return {"user_id": user_id, "balance": 0}
+        return {"user_id": user_id, "balance": 0, "ref_by": None}
     return user
 
 def update_balance(user_id, amount):
     users_col.update_one({"user_id": user_id}, {"$inc": {"balance": amount}})
 
-# 🔒 ONLY BACKUP VERIFY
+# 🔒 FORCE JOIN
 def check_join(user_id):
-    url = BASE_URL + "getChatMember"
-    params = {"chat_id": CHANNEL, "user_id": user_id}
     try:
-        res = requests.get(url, params=params).json()
+        res = requests.get(BASE_URL + "getChatMember",
+            params={"chat_id": CHANNEL, "user_id": user_id}).json()
         return res["result"]["status"] in ["member","administrator","creator"]
     except:
         return False
@@ -64,8 +64,7 @@ def check_join(user_id):
 def join_msg():
     return """🚫 *Access Locked*
 
-👉 Join our official channel:
-
+👉 Join channel:
 https://t.me/joinmoney_earning
 
 Then press /start again"""
@@ -79,52 +78,54 @@ def main_menu():
         "resize_keyboard": True
     }
 
-print("Bot running...")
-
 # ---------------- BOT LOOP ----------------
-while True:
-    fix_admin()
+def bot_loop():
+    global offset
+    print("🤖 Bot started")
 
-    updates = get_updates(offset)
+    while True:
+        fix_admin()
 
-    for update in updates["result"]:
-        offset = update["update_id"] + 1
+        updates = get_updates(offset)
 
-        if "message" not in update:
-            continue
+        for update in updates.get("result", []):
+            offset = update["update_id"] + 1
 
-        msg = update["message"]
-        user_id = msg["from"]["id"]
-        text = msg.get("text", "")
+            if "message" not in update:
+                continue
 
-        user = get_user(user_id)
+            msg = update["message"]
+            user_id = msg["from"]["id"]
+            text = msg.get("text", "")
 
-        # 🔒 FORCE JOIN (ONLY BACKUP)
-        if not check_join(user_id):
-            send_message(user_id, join_msg())
-            continue
+            user = get_user(user_id)
 
-        # 🚀 START + REFERRAL
-        if text.startswith("/start"):
-            parts = text.split()
+            # 🔒 FORCE JOIN
+            if not check_join(user_id):
+                send_message(user_id, join_msg())
+                continue
 
-            if len(parts) > 1:
-                try:
-                    ref_id = int(parts[1])
-                    if ref_id != user_id and not user.get("ref_by"):
-                        users_col.update_one({"user_id": user_id}, {"$set": {"ref_by": ref_id}})
-                        update_balance(ref_id, 20)
-                        send_message(ref_id, "🎉 ₹20 referral bonus received")
-                except:
-                    pass
+            # 🚀 START
+            if text.startswith("/start"):
+                parts = text.split()
 
-            send_message(user_id, "✅ Welcome!", main_menu())
+                if len(parts) > 1:
+                    try:
+                        ref_id = int(parts[1])
+                        if ref_id != user_id and not user.get("ref_by"):
+                            users_col.update_one({"user_id": user_id}, {"$set": {"ref_by": ref_id}})
+                            update_balance(ref_id, 20)
+                            send_message(ref_id, "🎉 ₹20 referral bonus received")
+                    except:
+                        pass
 
-        # 💰 EARN (AUTO OFFERS)
-        elif text == "💰 Earn":
+                send_message(user_id, "✅ Welcome!", main_menu())
 
-            send_message(user_id,
-                """💳 *Slice Offer*
+            # 💰 EARN
+            elif text == "💰 Earn":
+
+                send_message(user_id,
+                    """💳 *Slice Offer*
 
 🎁 ₹250 Cashback
 
@@ -132,125 +133,125 @@ while True:
 2. Signup  
 3. Use code DSNOX46416  
 4. First payment""",
-                {"inline_keyboard":[[{"text":"🔥 Get ₹250","url":"https://t.sliceit.com/s?c=irYwC_h&ic=DSNOX46416"}]]}
-            )
+                    {"inline_keyboard":[[{"text":"🔥 Get ₹250","url":"https://t.sliceit.com/s?c=irYwC_h&ic=DSNOX46416"}]]}
+                )
 
-            time.sleep(1)
+                time.sleep(1)
 
-            send_message(user_id,
-                """📈 *Upstox*
+                send_message(user_id,
+                    """📈 *Upstox*
 
 🎁 ₹120 Reward
 
 1. Open account  
 2. Complete KYC""",
-                {"inline_keyboard":[[{"text":"🔥 Get ₹120","url":"https://upstox.onelink.me/0H1s/5GCLUE"}]]}
-            )
+                    {"inline_keyboard":[[{"text":"🔥 Get ₹120","url":"https://upstox.onelink.me/0H1s/5GCLUE"}]]}
+                )
 
-            time.sleep(1)
+                time.sleep(1)
 
-            send_message(user_id,
-                """📱 *TaskBucks*
+                send_message(user_id,
+                    """📱 *TaskBucks*
 
 🎁 Earn money
 
 1. Install  
 2. Complete tasks""",
-                {"inline_keyboard":[[{"text":"🔥 Start","url":"http://tbk.bz/jf3gjkc9"}]]}
-            )
+                    {"inline_keyboard":[[{"text":"🔥 Start","url":"http://tbk.bz/jf3gjkc9"}]]}
+                )
 
-            time.sleep(1)
+                time.sleep(1)
 
-            send_message(user_id, "🚀 More offers coming soon...")
+                send_message(user_id, "🚀 More offers coming soon...")
 
-        # 💳 WALLET
-        elif text == "💳 Wallet":
+            # 💳 WALLET
+            elif text == "💳 Wallet":
 
-            history = withdraw_col.find({"user_id": user_id}).sort("_id",-1).limit(3)
+                history = withdraw_col.find({"user_id": user_id}).sort("_id",-1).limit(5)
 
-            hist = ""
-            for h in history:
-                hist += f"₹{h['amount']} - {h['status']}\n"
+                hist = ""
+                for h in history:
+                    hist += f"₹{h['amount']} - {h['status']}\n"
 
-            if not hist:
-                hist = "No transactions"
+                if not hist:
+                    hist = "No transactions"
 
-            send_message(user_id, f"""🏦 *Account Summary*
+                send_message(user_id, f"""🏦 *Account Summary*
 
 💰 Balance: ₹{user['balance']}
 
 📜 History:
 {hist}""")
 
-        # 👥 REFER
-        elif text == "👥 Refer":
-            link = f"https://t.me/Taskbucket_bot?start={user_id}"
-            send_message(user_id, f"👥 Earn ₹20 per referral\n\n{link}")
+            # 👥 REFER
+            elif text == "👥 Refer":
+                link = f"https://t.me/Taskbucket_bot?start={user_id}"
+                send_message(user_id, f"👥 Earn ₹20 per referral\n\n{link}")
 
-        # 💸 WITHDRAW
-        elif text == "💸 Withdraw":
+            # 💸 WITHDRAW
+            elif text == "💸 Withdraw":
 
-            if user["balance"] < 290:
-                send_message(user_id, "❌ Minimum ₹290 required")
-            else:
-                keyboard = {
-                    "keyboard":[["₹290","₹590","₹999"]],
-                    "resize_keyboard":True
-                }
-                send_message(user_id, "💸 Select plan:", keyboard)
-                user_step[user_id] = "plan"
+                if user["balance"] < 290:
+                    send_message(user_id, "❌ Minimum ₹290 required")
+                else:
+                    keyboard = {
+                        "keyboard":[["₹290","₹590","₹999"]],
+                        "resize_keyboard":True
+                    }
+                    send_message(user_id, "💸 Select plan:", keyboard)
+                    user_step[user_id] = "plan"
 
-        elif user_id in user_step and user_step[user_id] == "plan":
+            elif user_id in user_step and user_step[user_id] == "plan":
 
-            if text not in ["₹290","₹590","₹999"]:
-                send_message(user_id,"❌ Invalid plan")
-                continue
+                if text not in ["₹290","₹590","₹999"]:
+                    send_message(user_id,"❌ Invalid plan")
+                    continue
 
-            amount = int(text.replace("₹",""))
-            user_step[user_id] = {"amount":amount}
-            send_message(user_id,"💳 Enter UPI ID:")
+                amount = int(text.replace("₹",""))
+                user_step[user_id] = {"amount":amount}
+                send_message(user_id,"💳 Enter UPI ID:")
 
-        elif user_id in user_step and isinstance(user_step[user_id],dict):
+            elif user_id in user_step and isinstance(user_step[user_id],dict):
 
-            amount = user_step[user_id]["amount"]
-            upi = text
+                amount = user_step[user_id]["amount"]
+                upi = text
 
-            if user["balance"] < amount:
-                send_message(user_id,"❌ Not enough balance")
+                if user["balance"] < amount:
+                    send_message(user_id,"❌ Not enough balance")
+                    del user_step[user_id]
+                    continue
+
+                update_balance(user_id,-amount)
+
+                withdraw_col.insert_one({
+                    "user_id":user_id,
+                    "amount":amount,
+                    "upi":upi,
+                    "status":"pending"
+                })
+
+                send_message(user_id,f"✅ Withdraw request sent ₹{amount}")
+
+                send_message(ADMIN_ID,
+                    f"🚨 Withdraw Request\nUser: {user_id}\nAmount: ₹{amount}\nUPI: {upi}"
+                )
+
                 del user_step[user_id]
-                continue
 
-            update_balance(user_id,-amount)
+        time.sleep(2)
 
-            withdraw_col.insert_one({
-                "user_id":user_id,
-                "amount":amount,
-                "upi":upi,
-                "status":"pending"
-            })
-
-            send_message(user_id,f"✅ Withdraw request sent ₹{amount}")
-
-            send_message(ADMIN_ID,
-                f"🚨 Withdraw\nUser: {user_id}\nAmount: ₹{amount}\nUPI: {upi}"
-            )
-
-            del user_step[user_id]
-
-    time.sleep(2)
-
-from flask import Flask
-import threading
-import os
-
+# ---------------- FLASK ----------------
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Bot Running ✅"
 
-def run():
-    port = int(os.environ.get("PORT", 10000))  # 🔥 important
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    print("🌐 Flask running on", port)
     app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run).start()
+# ---------------- START ----------------
+threading.Thread(target=bot_loop).start()
+threading.Thread(target=run_flask).start()
