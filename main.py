@@ -1,263 +1,172 @@
 import os
-import asyncio
-import random
-import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
-from dotenv import load_dotenv
+import time
+import requests
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# ------------------ SETUP ------------------
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
 
-API_TOKEN = os.getenv("API_TOKEN")
+TOKEN = os.getenv("API_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 MONGO_URL = os.getenv("MONGO_URL")
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}/"
 
-# ------------------ DATABASE ------------------
 client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
 users_col = db["users"]
-withdraw_col = db["withdraw_history"]
+withdraw_col = db["withdraw"]
 
-# ADMIN ALWAYS ₹4000
-users_col.update_one(
-    {"user_id": ADMIN_ID},
-    {"$set": {"balance": 4000}},
-    upsert=True
-)
+CHANNEL = "@joinmoney_earning"
 
-# 5 SUCCESS PAYMENT HISTORY (ALL TO YOUR UPI)
-if withdraw_col.count_documents({}) == 0:
-    withdraw_col.insert_many([
-        {"user_id": 847392, "amount": 290, "upi": "tbot99@ptaxis", "status": "success"},
-        {"user_id": 928374, "amount": 590, "upi": "tbot99@ptaxis", "status": "success"},
-        {"user_id": 736281, "amount": 999, "upi": "tbot99@ptaxis", "status": "success"},
-        {"user_id": 564738, "amount": 290, "upi": "tbot99@ptaxis", "status": "success"},
-        {"user_id": 192837, "amount": 590, "upi": "tbot99@ptaxis", "status": "success"}
-    ])
-
-CHANNELS = ["@your_main_channel"]
-ADMIN_UPI = "tbot99@ptaxis"
-
+offset = 0
 user_step = {}
 
+# ------------------ ADMIN SET ------------------
+if not users_col.find_one({"user_id": ADMIN_ID}):
+    users_col.insert_one({"user_id": ADMIN_ID, "balance": 4000, "ref_by": None})
+
 # ------------------ FUNCTIONS ------------------
+def send_message(chat_id, text, keyboard=None):
+    data = {"chat_id": chat_id, "text": text}
+    if keyboard:
+        data["reply_markup"] = keyboard
+    requests.post(BASE_URL + "sendMessage", json=data)
+
+def get_updates(offset):
+    return requests.get(BASE_URL + "getUpdates", params={"offset": offset}).json()
+
 def get_user(user_id):
     user = users_col.find_one({"user_id": user_id})
     if not user:
-        users_col.insert_one({
-            "user_id": user_id,
-            "balance": 0,
-            "ref_by": None
-        })
+        users_col.insert_one({"user_id": user_id, "balance": 0, "ref_by": None})
         return {"user_id": user_id, "balance": 0}
     return user
 
 def update_balance(user_id, amount):
-    if user_id == ADMIN_ID:
-        return
     users_col.update_one({"user_id": user_id}, {"$inc": {"balance": amount}})
 
-async def check_join(user_id):
-    for ch in CHANNELS:
-        try:
-            member = await bot.get_chat_member(ch, user_id)
-            if member.status not in ["member","administrator","creator"]:
-                return False
-        except:
-            return False
-    return True
+def check_join(user_id):
+    url = BASE_URL + "getChatMember"
+    params = {"chat_id": CHANNEL, "user_id": user_id}
+    res = requests.get(url, params=params).json()
+    try:
+        status = res["result"]["status"]
+        return status in ["member", "administrator", "creator"]
+    except:
+        return False
 
-# ------------------ AUTO MESSAGE ------------------
-async def auto_message():
-    msgs = [
-    "✅ Withdrawal request of ₹290 has been successfully processed",
-    "💳 ₹590 payout completed and credited",
-    "🎉 Congratulations! ₹999 reward has been credited",
-    "🔔 Your withdrawal of ₹290 is successfully completed",
-    "🏦 ₹590 has been transferred successfully",
-    "💰 Payment of ₹290 confirmed",
-    "🚀 ₹999 bonus credited to user account",
-    "📢 A user has just received ₹590 payout",
-    "🔥 Instant withdrawal of ₹290 completed",
-    "✨ ₹999 reward processed successfully"
-   ]
-    ]
-    while True:
-        for user in users_col.find():
-            try:
-                await bot.send_message(user["user_id"], random.choice(msgs))
-                await asyncio.sleep(0.1)
-            except:
-                pass
-        await asyncio.sleep(300)
+# ------------------ KEYBOARDS ------------------
+def main_menu():
+    return {
+        "keyboard": [
+            ["💰 Earn", "👥 Refer"],
+            ["💳 Wallet", "💸 Withdraw"]
+        ],
+        "resize_keyboard": True
+    }
 
-# ------------------ START + REFERRAL ------------------
-@dp.message_handler(commands=['start'])
-async def start(msg: types.Message):
-    user_id = msg.from_user.id
-    args = msg.get_args()
+def earn_menu():
+    return {
+        "keyboard": [
+            ["🥇 Slice ₹250"],
+            ["🥈 Upstox ₹120"],
+            ["🥉 TaskBucks ₹70"]
+        ],
+        "resize_keyboard": True
+    }
 
-    user = users_col.find_one({"user_id": user_id})
+# ------------------ BOT LOOP ------------------
+print("Bot running...")
 
-    if not user:
-        users_col.insert_one({
-            "user_id": user_id,
-            "balance": 0,
-            "ref_by": None
-        })
+while True:
+    updates = get_updates(offset)
 
-        if args:
-            try:
-                ref_id = int(args)
-                if ref_id != user_id:
-                    users_col.update_one(
-                        {"user_id": user_id},
-                        {"$set": {"ref_by": ref_id}}
-                    )
-                    update_balance(ref_id, 20)
-                    try:
-                        await bot.send_message(ref_id, "🎉 ₹20 referral bonus received!")
-                    except:
-                        pass
-            except:
-                pass
+    for update in updates["result"]:
+        offset = update["update_id"] + 1
 
-    kb = InlineKeyboardMarkup()
-    kb = InlineKeyboardMarkup(row_width=1)
-kb.add(
-    InlineKeyboardButton("📢 Join Channel", url="https://t.me/joinmoney_earning"),
-    InlineKeyboardButton("✅ Verify", callback_data="verify")
+        if "message" not in update:
+            continue
 
-    )
+        msg = update["message"]
+        user_id = msg["from"]["id"]
+        text = msg.get("text", "")
 
-    await msg.answer("Join channel then verify", reply_markup=kb)
+        user = get_user(user_id)
 
-# ------------------ VERIFY ------------------
-@dp.callback_query_handler(lambda c: c.data == "verify")
-async def verify(call: types.CallbackQuery):
-    if await check_join(call.from_user.id):
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.add("💰 Earn", "👥 Refer & Earn")
-        kb.add("💳 Wallet", "💸 Withdraw")
-        await call.message.answer("✅ Verified!", reply_markup=kb)
-    else:
-        await call.answer("❌ Join channel first", show_alert=True)
+        # START + REFERRAL
+        if text.startswith("/start"):
+            parts = text.split()
+            if len(parts) > 1:
+                try:
+                    ref_id = int(parts[1])
+                    if ref_id != user_id and not user.get("ref_by"):
+                        users_col.update_one({"user_id": user_id}, {"$set": {"ref_by": ref_id}})
+                        update_balance(ref_id, 20)
+                        send_message(ref_id, "🎉 ₹20 referral bonus received")
+                except:
+                    pass
 
-# ------------------ REFER ------------------
-@dp.message_handler(lambda m: m.text == "👥 Refer & Earn")
-async def refer(msg: types.Message):
-    bot_info = await bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start={msg.from_user.id}"
+            send_message(
+                user_id,
+                "📢 Join channel first:\nhttps://t.me/joinmoney_earning\n\nThen type VERIFY"
+            )
 
-    await msg.answer(
-        f"👥 Refer & Earn\n\n"
-        f"💰 Earn ₹20 per referral\n\n{ref_link}"
-    )
+        # VERIFY
+        elif text.lower() == "verify":
+            if check_join(user_id):
+                send_message(user_id, "✅ Verified!", main_menu())
+            else:
+                send_message(user_id, "❌ Pehle channel join karo")
 
-# ------------------ EARN ------------------
-@dp.message_handler(lambda m: m.text == "💰 Earn")
-async def earn(msg: types.Message):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("🥇 Slice ₹250","🥈 Upstox ₹120")
-    kb.add("🥉 TaskBucks ₹70","⏳ Offer Coming Soon")
-    await msg.answer("Select offer:", reply_markup=kb)
+        # EARN
+        elif text == "💰 Earn":
+            send_message(user_id, "Select offer:", earn_menu())
 
-# ------------------ OFFERS ------------------
-@dp.message_handler(lambda m: m.text == "🥇 Slice ₹250")
-async def slice(msg: types.Message):
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Get ₹250", url="https://t.sliceit.com/s?c=irYwC_h&ic=DSNOX46416"))
-    await msg.answer("Install → Signup → Complete\nEarn ₹250", reply_markup=kb)
+        elif text == "🥇 Slice ₹250":
+            send_message(user_id, "Install → Signup → Earn ₹250\nhttps://t.sliceit.com/s?c=irYwC_h&ic=DSNOX46416")
 
-@dp.message_handler(lambda m: m.text == "🥈 Upstox ₹120")
-async def upstox(msg: types.Message):
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Get ₹120", url="https://upstox.onelink.me/0H1s/5GCLUE"))
-    await msg.answer("Open account → KYC\nEarn ₹120", reply_markup=kb)
+        elif text == "🥈 Upstox ₹120":
+            send_message(user_id, "Open account → Earn ₹120\nhttps://upstox.onelink.me/0H1s/5GCLUE")
 
-@dp.message_handler(lambda m: m.text == "🥉 TaskBucks ₹70")
-async def taskbucks(msg: types.Message):
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Get ₹70", url="http://tbk.bz/jf3gjkc9"))
-    await msg.answer("Complete tasks\nEarn ₹70", reply_markup=kb)
+        elif text == "🥉 TaskBucks ₹70":
+            send_message(user_id, "Complete tasks → Earn ₹70\nhttp://tbk.bz/jf3gjkc9")
 
-@dp.message_handler(lambda m: m.text == "⏳ Offer Coming Soon")
-async def coming(msg: types.Message):
-    await msg.answer("More offers coming soon!")
+        # WALLET
+        elif text == "💳 Wallet":
+            send_message(user_id, f"💰 Balance: ₹{user['balance']}")
 
-# ------------------ WALLET ------------------
-@dp.message_handler(lambda m: m.text == "💳 Wallet")
-async def wallet(msg: types.Message):
-    user = get_user(msg.from_user.id)
-    await msg.answer(f"Balance: ₹{user['balance']}")
+        # REFER
+        elif text == "👥 Refer":
+            link = f"https://t.me/Taskbucket_bot?start={user_id}"
+            send_message(user_id, f"👥 Refer & Earn ₹20\n\n{link}")
 
-# ------------------ WITHDRAW ------------------
-@dp.message_handler(lambda m: m.text == "💸 Withdraw")
-async def withdraw(msg: types.Message):
-    user = get_user(msg.from_user.id)
+        # WITHDRAW
+        elif text == "💸 Withdraw":
+            if user["balance"] < 290:
+                send_message(user_id, "❌ Minimum ₹290 required")
+            else:
+                send_message(user_id, "Enter UPI ID:")
+                user_step[user_id] = "upi"
 
-    if user["balance"] < 290:
-        await msg.answer("Minimum ₹290 required")
-        return
+        elif user_id in user_step:
+            upi = text
 
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("₹290","₹590","₹999")
-    user_step[msg.from_user.id] = "plan"
-    await msg.answer("Select plan:", reply_markup=kb)
+            if user["balance"] >= 290:
+                update_balance(user_id, -290)
 
-# ------------------ HANDLE ------------------
-@dp.message_handler()
-async def handle(msg: types.Message):
-    user_id = msg.from_user.id
+                withdraw_col.insert_one({
+                    "user_id": user_id,
+                    "amount": 290,
+                    "upi": upi,
+                    "status": "pending"
+                })
 
-    if user_id not in user_step:
-        return
+                send_message(user_id, "✅ Withdraw request sent\n💸 ₹290 deducted")
+                send_message(ADMIN_ID, f"Withdraw Request\nUser: {user_id}\nUPI: {upi}")
+            else:
+                send_message(user_id, "❌ Balance kam hai")
 
-    step = user_step[user_id]
+            del user_step[user_id]
 
-    if step == "plan":
-        if msg.text not in ["₹290","₹590","₹999"]:
-            await msg.answer("Invalid plan")
-            return
-
-        amount = int(msg.text.replace("₹",""))
-        user_step[user_id] = {"amount": amount}
-        await msg.answer(f"Enter UPI ID (Default: {ADMIN_UPI})")
-
-    elif isinstance(step, dict):
-        if user_id != ADMIN_ID:
-            update_balance(user_id, -step['amount'])
-
-        withdraw_col.insert_one({
-            "user_id": user_id,
-            "amount": step['amount'],
-            "upi": msg.text,
-            "status": "pending"
-        })
-
-        await bot.send_message(
-            ADMIN_ID,
-            f"Withdraw Request\nUser: {user_id}\nAmount: ₹{step['amount']}\nUPI: {msg.text}"
-        )
-
-        await msg.answer("Request sent")
-        del user_step[user_id]
-
-# ------------------ ADMIN ------------------
-@dp.message_handler(commands=['admin'])
-async def admin(msg: types.Message):
-    if msg.from_user.id == ADMIN_ID:
-        await msg.answer(f"Users: {users_col.count_documents({})}\nBalance: ₹4000")
-
-# ------------------ MAIN ------------------
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(auto_message())
-    executor.start_polling(dp)
+    time.sleep(2)
